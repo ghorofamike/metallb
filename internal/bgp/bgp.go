@@ -451,7 +451,7 @@ type tcpmd5sig struct {
 	key       [80]byte
 }
 
-func (s *Session ) setTCPMD5(conn io.ReadCloser) error {
+func (s *Session ) setTCPMD5(conn net.Conn) error {
 
         const TCP_MD5SIG = 14 // RFC2385
         t := tcpmd5sig{}
