@@ -113,7 +113,7 @@ func (c *bgpController) syncPeers() error {
 			if p.cfg.RouterID != nil {
 				routerID = p.cfg.RouterID
 			}
-			s, err := newBGP(fmt.Sprintf("%s:%d", p.cfg.Addr, p.cfg.Port), p.cfg.MyASN, routerID, p.cfg.ASN, p.cfg.HoldTime)
+			s, err := newBGP(fmt.Sprintf("%s:%d", p.cfg.Addr, p.cfg.Port), p.cfg.MyASN, routerID, p.cfg.ASN, p.cfg.HoldTime, p.cfg.Password)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("Creating BGP session to %q: %s", p.cfg.Addr, err))
 			} else {
@@ -216,6 +216,6 @@ func (c *bgpController) SetNode(node *v1.Node) error {
 	return c.syncPeers()
 }
 
-var newBGP = func(addr string, myASN uint32, routerID net.IP, asn uint32, hold time.Duration) (session, error) {
-	return bgp.New(addr, myASN, routerID, asn, hold)
+var newBGP = func(addr string, myASN uint32, routerID net.IP, asn uint32, hold time.Duration, password string) (session, error) {
+	return bgp.New(addr, myASN, routerID, asn, hold, password)
 }
