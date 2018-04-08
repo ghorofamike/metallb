@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	"syscall"
+	"unsafe"
 
 	"github.com/golang/glog"
 )
@@ -24,6 +26,7 @@ type Session struct {
 	addr     string
 	peerASN  uint32
 	holdTime time.Duration
+	password     string
 
 	newHoldTime chan bool
 	backoff     backoff
@@ -142,6 +145,8 @@ func (s *Session) sendUpdates() error {
 }
 
 // connect establishes the BGP session with the peer.
+// sets TCP_MD5 sockopt if password is !="", 
+// Better way may be available in  Go 1.11, see go-review.googlesource.com/c/go/+/72810
 func (s *Session) connect() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,6 +160,14 @@ func (s *Session) connect() error {
 
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", s.addr)
+
+        if s.password != "" {
+           err = s.setTCPMD5(conn) 
+           if err != nil {
+              return fmt.Errorf("setting TCP_MD5 sockopt to %q: %s",s.addr, err)
+           }
+         }
+
 	if err != nil {
 		return fmt.Errorf("dial %q: %s", s.addr, err)
 	}
@@ -284,7 +297,7 @@ func (s *Session) sendKeepalive() error {
 //
 // The session will immediately try to connect and synchronize its
 // local state with the peer.
-func New(addr string, asn uint32, routerID net.IP, peerASN uint32, holdTime time.Duration) (*Session, error) {
+func New(addr string, asn uint32, routerID net.IP, peerASN uint32, holdTime time.Duration, password string) (*Session, error) {
 	ret := &Session{
 		addr:        addr,
 		asn:         asn,
@@ -293,6 +306,7 @@ func New(addr string, asn uint32, routerID net.IP, peerASN uint32, holdTime time
 		holdTime:    holdTime,
 		newHoldTime: make(chan bool, 1),
 		advertised:  map[string]*Advertisement{},
+		password:    password,
 	}
 	ret.cond = sync.NewCond(&ret.mu)
 	go ret.sendKeepalives()
@@ -426,3 +440,50 @@ func (a *Advertisement) Equal(b *Advertisement) bool {
 	}
 	return reflect.DeepEqual(a.Communities, b.Communities)
 }
+
+
+type tcpmd5sig struct {
+	ss_family uint16
+	ss        [126]byte
+	pad1      uint16
+	keylen    uint16
+	pad2      uint32
+	key       [80]byte
+}
+
+func (s *Session ) setTCPMD5(conn io.ReadCloser) error {
+
+        const TCP_MD5SIG = 14 // RFC2385
+        t := tcpmd5sig{}
+        addr := net.ParseIP(s.addr)
+
+	if addr.To4() != nil {
+		t.ss_family = syscall.AF_INET
+		copy(t.ss[2:], addr.To4())
+	} else {
+		t.ss_family = syscall.AF_INET6
+		copy(t.ss[6:], addr.To16())
+	}
+
+	t.keylen = uint16(len(s.password))
+        copy(t.key[0:], []byte(s.password)) 
+	b := *(*[unsafe.Sizeof(t)]byte)(unsafe.Pointer(&t))
+
+        tcpConn, ok := conn.(*net.TCPConn)
+
+        if !ok {
+	    err := errors.New("conn is not tcp")
+            return  err
+        }
+        f, err := tcpConn.File()
+        if err != nil {
+            return  err
+        }
+
+	err = syscall.SetsockoptString(int(f.Fd()), syscall.IPPROTO_TCP, TCP_MD5SIG,string(b[:]))
+        if err != nil {
+            return  err
+        }
+        return nil
+}
+
